@@ -24,6 +24,7 @@ import cola
 from cola.ops import (
     Identity,
     LinearOperator,
+    Triangular,
 )
 from jax import vmap
 import jax.numpy as jnp
@@ -55,6 +56,7 @@ class GaussianDistribution(tfd.Distribution):
         self,
         loc: Optional[Float[Array, " N"]] = None,
         scale: Optional[LinearOperator] = None,
+        is_sqrt: bool = False,
     ) -> None:
         r"""Initialises the distribution.
 
@@ -77,10 +79,22 @@ class GaussianDistribution(tfd.Distribution):
 
         # If not specified, set the scale to the identity matrix.
         if scale is None:
-            scale = Identity(shape=(num_dims, num_dims), dtype=loc.dtype)
+            sqrt = Identity(shape=(num_dims, num_dims), dtype=loc.dtype)
+        elif is_sqrt:
+            if not isinstance(scale, Triangular):
+                raise ValueError(
+                    "Expected LinearOperator to be Triangular, did you forget to use cola.ops.Triangular?"
+                )
+            sqrt = scale
+        else:
+            if cola.PSD not in scale.annotations:
+                raise ValueError(
+                    "Expected LinearOperator to be PSD, did you forget to use cola.PSD?"
+                )
+            sqrt = lower_cholesky(scale)
 
         self.loc = loc
-        self.scale = cola.PSD(scale)
+        self.sqrt = sqrt
 
     def mean(self) -> Float[Array, " N"]:
         r"""Calculates the mean."""
@@ -96,15 +110,15 @@ class GaussianDistribution(tfd.Distribution):
 
     def covariance(self) -> Float[Array, "N N"]:
         r"""Calculates the covariance matrix."""
-        return self.scale.to_dense()
+        return (self.sqrt @ self.sqrt.T).to_dense()
 
     def variance(self) -> Float[Array, " N"]:
         r"""Calculates the variance."""
-        return cola.diag(self.scale)
+        return jnp.sum(jnp.square(self.sqrt.to_dense()), axis=-1)
 
     def stddev(self) -> Float[Array, " N"]:
         r"""Calculates the standard deviation."""
-        return jnp.sqrt(cola.diag(self.scale))
+        return jnp.sqrt(self.variance())
 
     @property
     def event_shape(self) -> Tuple:
@@ -115,7 +129,7 @@ class GaussianDistribution(tfd.Distribution):
         r"""Calculates the entropy of the distribution."""
         return 0.5 * (
             self.event_shape[0] * (1.0 + jnp.log(2.0 * jnp.pi))
-            + cola.logdet(self.scale, Cholesky(), Cholesky())
+            + jnp.sum(jnp.log(jnp.square(cola.diag(self.sqrt))))
         )
 
     def log_prob(self, y: Float[Array, " N"]) -> ScalarFloat:
@@ -127,18 +141,18 @@ class GaussianDistribution(tfd.Distribution):
         Returns:
             The log probability of the value as a scalar array.
         """
-        mu = self.loc
-        sigma = self.scale
-        n = mu.shape[-1]
+        loc = self.loc
+        sqrt = self.sqrt
+        n = loc.shape[-1]
 
         # diff, y - µ
-        diff = y - mu
+        diff = y - loc
 
         # compute the pdf, -1/2[ n log(2π) + log|Σ| + (y - µ)ᵀΣ⁻¹(y - µ) ]
         return -0.5 * (
             n * jnp.log(2.0 * jnp.pi)
-            + cola.logdet(sigma, Cholesky(), Cholesky())
-            + diff.T @ cola.solve(sigma, diff, Cholesky())
+            + jnp.sum(jnp.log(jnp.square(cola.diag(sqrt))))
+            + jnp.sum(jnp.square(cola.solve(sqrt, diff, Cholesky())))
         )
 
     def _sample_n(self, key: KeyArray, n: int) -> Float[Array, "n N"]:
@@ -150,15 +164,12 @@ class GaussianDistribution(tfd.Distribution):
         Returns:
             The samples as an array of shape (n_samples, n_points).
         """
-        # Obtain covariance root.
-        sqrt = lower_cholesky(self.scale)
-
         # Gather n samples from standard normal distribution Z = [z₁, ..., zₙ]ᵀ.
         Z = jr.normal(key, shape=(n, *self.event_shape))
 
         # xᵢ ~ N(loc, cov) <=> xᵢ = loc + sqrt zᵢ, where zᵢ ~ N(0, I).
         def affine_transformation(x):
-            return self.loc + sqrt @ x
+            return self.loc + self.sqrt @ x
 
         return vmap(affine_transformation)(Z)
 
@@ -212,15 +223,11 @@ def _kl_divergence(q: GaussianDistribution, p: GaussianDistribution) -> ScalarFl
 
     # Extract q mean and covariance.
     mu_q = q.loc
-    sigma_q = q.scale
+    sqrt_q = q.sqrt
 
     # Extract p mean and covariance.
     mu_p = p.loc
-    sigma_p = p.scale
-
-    # Find covariance roots.
-    sqrt_p = lower_cholesky(sigma_p)
-    sqrt_q = lower_cholesky(sigma_q)
+    sqrt_p = p.sqrt
 
     # diff, μp - μq
     diff = mu_p - mu_q
@@ -237,8 +244,8 @@ def _kl_divergence(q: GaussianDistribution, p: GaussianDistribution) -> ScalarFl
     return (
         mahalanobis
         - n_dim
-        - cola.logdet(sigma_q, Cholesky(), Cholesky())
-        + cola.logdet(sigma_p, Cholesky(), Cholesky())
+        - jnp.sum(jnp.log(jnp.square(cola.diag(sqrt_q))))
+        + jnp.sum(jnp.log(jnp.square(cola.diag(sqrt_p))))
         + trace
     ) / 2.0
 

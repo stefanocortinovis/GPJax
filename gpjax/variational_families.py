@@ -189,9 +189,10 @@ class VariationalGaussian(AbstractVariationalGaussian[L]):
         Kzz = PSD(Kzz + I_like(Kzz) * self.jitter)
 
         sqrt = Triangular(sqrt)
-        S = sqrt @ sqrt.T
 
-        qu = GaussianDistribution(loc=jnp.atleast_1d(mu.squeeze()), scale=S)
+        qu = GaussianDistribution(
+            loc=jnp.atleast_1d(mu.squeeze()), scale=sqrt, is_sqrt=True
+        )
         pu = GaussianDistribution(loc=jnp.atleast_1d(muz.squeeze()), scale=Kzz)
 
         return qu.kl_divergence(pu)
@@ -255,7 +256,7 @@ class VariationalGaussian(AbstractVariationalGaussian[L]):
         covariance += I_like(covariance) * self.jitter
 
         return GaussianDistribution(
-            loc=jnp.atleast_1d(mean.squeeze()), scale=covariance
+            loc=jnp.atleast_1d(mean.squeeze()), scale=PSD(covariance)
         )
 
 
@@ -289,11 +290,10 @@ class WhitenedVariationalGaussian(VariationalGaussian[L]):
         mu = self.variational_mean.value
         sqrt = Triangular(self.variational_root_covariance.value)
 
-        # S = LLᵀ
-        S = sqrt @ sqrt.T
-
         # Compute whitened KL divergence
-        qu = GaussianDistribution(loc=jnp.atleast_1d(mu.squeeze()), scale=S)
+        qu = GaussianDistribution(
+            loc=jnp.atleast_1d(mu.squeeze()), scale=sqrt, is_sqrt=True
+        )
         pu = GaussianDistribution(loc=jnp.zeros_like(jnp.atleast_1d(mu.squeeze())))
         return qu.kl_divergence(pu)
 
@@ -352,7 +352,7 @@ class WhitenedVariationalGaussian(VariationalGaussian[L]):
         covariance += I_like(covariance) * self.jitter
 
         return GaussianDistribution(
-            loc=jnp.atleast_1d(mean.squeeze()), scale=covariance
+            loc=jnp.atleast_1d(mean.squeeze()), scale=PSD(covariance)
         )
 
 
@@ -435,7 +435,7 @@ class NaturalVariationalGaussian(AbstractVariationalGaussian[L]):
         Kzz = kernel.gram(z)
         Kzz += I_like(Kzz) * self.jitter
 
-        qu = GaussianDistribution(loc=jnp.atleast_1d(mu.squeeze()), scale=S)
+        qu = GaussianDistribution(loc=jnp.atleast_1d(mu.squeeze()), scale=PSD(S))
         pu = GaussianDistribution(loc=jnp.atleast_1d(muz.squeeze()), scale=Kzz)
 
         return qu.kl_divergence(pu)
@@ -513,7 +513,7 @@ class NaturalVariationalGaussian(AbstractVariationalGaussian[L]):
         covariance += I_like(covariance) * self.jitter
 
         return GaussianDistribution(
-            loc=jnp.atleast_1d(mean.squeeze()), scale=covariance
+            loc=jnp.atleast_1d(mean.squeeze()), scale=PSD(covariance)
         )
 
 
@@ -583,15 +583,14 @@ class ExpectationVariationalGaussian(AbstractVariationalGaussian[L]):
 
         # S = η₂ - η₁ η₁ᵀ
         S = expectation_matrix - jnp.outer(mu, mu)
-        S = PSD(Dense(S))
-        S += I_like(S) * self.jitter
+        S = Dense(S) + I_like(S) * self.jitter
 
         muz = mean_function(z)
         Kzz = kernel.gram(z)
         Kzz += I_like(Kzz) * self.jitter
 
-        qu = GaussianDistribution(loc=jnp.atleast_1d(mu.squeeze()), scale=S)
-        pu = GaussianDistribution(loc=jnp.atleast_1d(muz.squeeze()), scale=Kzz)
+        qu = GaussianDistribution(loc=jnp.atleast_1d(mu.squeeze()), scale=PSD(S))
+        pu = GaussianDistribution(loc=jnp.atleast_1d(muz.squeeze()), scale=PSD(Kzz))
 
         return qu.kl_divergence(pu)
 
@@ -666,7 +665,7 @@ class ExpectationVariationalGaussian(AbstractVariationalGaussian[L]):
         covariance += I_like(covariance) * self.jitter
 
         return GaussianDistribution(
-            loc=jnp.atleast_1d(mean.squeeze()), scale=covariance
+            loc=jnp.atleast_1d(mean.squeeze()), scale=PSD(covariance)
         )
 
 
@@ -768,7 +767,7 @@ class CollapsedVariationalGaussian(AbstractVariationalGaussian[GL]):
         covariance += I_like(covariance) * self.jitter
 
         return GaussianDistribution(
-            loc=jnp.atleast_1d(mean.squeeze()), scale=covariance
+            loc=jnp.atleast_1d(mean.squeeze()), scale=PSD(covariance)
         )
 
 
