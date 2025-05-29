@@ -8,7 +8,7 @@ from beartype.typing import (
     Dict,
     Union,
 )
-from jaxlib.xla_extension import PjitFunction
+from jax.lib.xla_extension import PjitFunction
 
 from gpjax.kernels import (
     RFF,
